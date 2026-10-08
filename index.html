@@ -1,0 +1,961 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>eBPF Playground — Interactive Linux execution model</title>
+<meta name="description" content="A restrained interactive model of a typical modern Linux eBPF workflow.">
+<style>
+:root{
+  --bg:#101214;
+  --surface:#16191c;
+  --surface-2:#1b1f23;
+  --border:#30363c;
+  --border-strong:#48515a;
+  --text:#e8ecef;
+  --muted:#9aa3ab;
+  --faint:#68727b;
+  --accent:#7db2df;
+  --green:#71bf8f;
+  --red:#e48c8c;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace;
+  --sans:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  --radius:4px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--text)}
+body{font:14px/1.45 var(--sans)}
+button,select{font:inherit}
+button{color:inherit;background:none;border:0;cursor:pointer}
+button:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.mono{font-family:var(--mono)}
+.hidden{display:none!important}
+.app{max-width:1400px;margin:0 auto;padding:16px 22px 26px}
+.topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;padding-bottom:11px;border-bottom:1px solid var(--border)}
+.brand{display:flex;align-items:baseline;gap:9px;min-width:0}
+.brand h1{margin:0;font-size:15px;font-weight:650;letter-spacing:.01em}
+.brand span{font-size:12px;color:var(--muted);white-space:nowrap}
+.top-actions{display:flex;gap:6px;flex:none}
+.ghost,.compact{min-height:30px;padding:5px 9px;border:1px solid var(--border);border-radius:var(--radius);color:var(--muted)}
+.ghost:hover,.compact:hover{color:var(--text);border-color:var(--border-strong);background:var(--surface-2)}
+.intro{display:flex;justify-content:space-between;align-items:center;gap:18px;padding:12px 0 11px}
+.intro p{margin:0;color:#cbd1d6;font-size:13px}
+.mode{display:flex;align-items:center;gap:7px;white-space:nowrap}
+.label{font:10px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--faint)}
+.segmented{display:inline-flex;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+.segmented button{padding:5px 9px;border-right:1px solid var(--border);color:var(--muted);font-size:12px}
+.segmented button:last-child{border-right:0}
+.segmented button[aria-pressed="true"]{color:var(--text);background:var(--surface-2)}
+.toolbar{display:grid;grid-template-columns:auto auto 1fr auto;gap:8px;align-items:center;padding:9px 0;border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
+.control{display:flex;align-items:center;gap:7px}
+select{min-width:205px;padding:6px 9px;color:var(--text);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius)}
+.action{min-height:32px;padding:6px 12px;border:1px solid #d9e1e6;border-radius:var(--radius);background:#d9e1e6;color:#101214;font-weight:650}
+.action:hover{background:#edf2f5}
+.action.danger{border-color:#6d4444;background:#2b1c1c;color:#efb2b2}
+.action:disabled{opacity:.45;cursor:not-allowed}
+.diagram{margin-top:11px;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;background:var(--surface)}
+.zone{border-bottom:1px solid var(--border)}
+.zone:last-child{border-bottom:0}
+.zone-header{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:9px 13px;border-bottom:1px solid var(--border)}
+.zone-title{display:flex;align-items:center;gap:8px;font:10px var(--mono);letter-spacing:.12em;color:var(--muted)}
+.zone-title::before{content:"";width:22px;height:1px;background:var(--border-strong)}
+.zone-note{color:var(--faint);font-size:11px}
+.flow{display:grid;grid-template-columns:minmax(0,1fr) 34px minmax(0,1.05fr) 34px minmax(0,.95fr);align-items:stretch}
+.flow-node{min-height:82px;padding:11px 13px;border-right:1px solid var(--border);display:flex;flex-direction:column;justify-content:space-between;cursor:pointer}
+.flow-node:hover{background:var(--surface-2)}
+.flow-node:last-child{border-right:0}
+.flow-node.active{background:#1c252c;border-color:var(--accent)}
+.flow-node.success{background:#18231d;border-color:#3b6649}
+.flow-node.fail{background:#261a1b;border-color:#6d4444}
+.flow-label{font-size:13px;font-weight:650}
+.flow-sub{margin-top:4px;color:var(--muted);font-size:11px}
+.flow-meta{font:11px var(--mono);color:var(--muted);word-break:break-word}
+.arrow,.runtime-arrow,.path-arrow{position:relative}
+.arrow{display:flex;align-items:center;justify-content:center;color:var(--faint);border-right:1px solid var(--border);font-size:15px}
+.runtime-arrow,.path-arrow{display:flex;align-items:center;justify-content:center;color:var(--faint);font-size:15px}
+.arrow.active,.runtime-arrow.active,.path-arrow.active{color:var(--accent)}
+.arrow.active::before,.runtime-arrow.active::before,.path-arrow.active::before{content:"";position:absolute;width:4px;height:4px;border-radius:50%;background:currentColor;left:12%;top:50%;transform:translateY(-50%);animation:arrowTravel 280ms linear 1}
+@keyframes arrowTravel{from{left:12%;opacity:.15}to{left:82%;opacity:1}}
+.kernel-load{display:grid;grid-template-columns:minmax(0,.9fr) 28px minmax(0,.95fr) 28px minmax(0,1.15fr);align-items:stretch;border-bottom:1px solid var(--border)}
+.load-node{min-height:78px;padding:11px 13px;border-right:1px solid var(--border);cursor:pointer}
+.load-node:hover{background:var(--surface-2)}
+.load-node.active{background:#1c252c;border-color:var(--accent)}
+.load-node.fail{background:#261a1b;border-color:#6d4444}
+.load-node .state{display:block;margin-top:8px;font:10px var(--mono);color:var(--faint);letter-spacing:.06em}
+.hook-area{padding:11px 13px;border-bottom:1px solid var(--border)}
+.hook-layout{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);gap:16px;align-items:center}
+.hook-list{display:flex;flex-wrap:wrap;gap:4px}
+.hook{padding:5px 7px;border:1px solid var(--border);border-radius:4px;color:var(--muted);font:10px var(--mono)}
+.hook:hover{color:var(--text);border-color:var(--border-strong)}
+.hook[aria-pressed="true"]{color:var(--text);background:#1c252c;border-color:var(--accent)}
+.hook-info{font-size:11px;color:var(--muted)}
+.hook-info .mono{display:block;margin-top:3px;color:var(--text)}
+.runtime{padding:11px 13px}
+.runtime-grid{display:grid;grid-template-columns:minmax(0,.95fr) 28px minmax(0,1fr) 28px minmax(0,.95fr);align-items:stretch}
+.runtime-node{min-height:74px;padding:10px 12px;border:1px solid var(--border);background:#131619;cursor:pointer}
+.runtime-node + .runtime-arrow{border-top:1px solid transparent}
+.runtime-node:hover{background:var(--surface-2)}
+.runtime-node.active{border-color:var(--accent);background:#1c252c}
+.runtime-node.success{border-color:#3b6649;background:#18231d}
+.runtime-node.fail{border-color:#6d4444;background:#261a1b}
+.runtime-arrow{display:flex;align-items:center;justify-content:center;color:var(--faint);font-size:15px}
+.runtime-arrow.active{color:var(--accent)}
+.event-focus{display:flex;flex-direction:column;justify-content:center;align-items:center;min-height:74px;padding:10px;text-align:center;border:1px dashed var(--border-strong);background:#121518}
+.event-focus .focus-label{font:10px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--faint)}
+.event-focus strong{margin-top:4px;font-size:13px}
+.event-focus span:last-child{margin-top:3px;color:var(--muted);font-size:11px}
+.xdp-path{display:grid;grid-template-columns:1fr 28px 1fr 28px 1fr;align-items:stretch}
+.xdp-path .path-node{padding:11px 12px;border:1px solid var(--border);background:#131619;min-height:72px;cursor:pointer}
+.xdp-path .path-node:hover{background:var(--surface-2)}
+.xdp-path .path-node.active{border-color:var(--accent);background:#1c252c}
+.xdp-path .path-arrow{display:flex;align-items:center;justify-content:center;color:var(--faint)}
+.xdp-action{display:flex;gap:4px;margin-top:7px;flex-wrap:wrap}
+.xdp-action span{padding:3px 5px;border:1px solid var(--border);border-radius:3px;color:var(--faint);font:10px var(--mono)}
+.xdp-action span.active-pass{color:var(--green);border-color:#3b6649;background:#18231d}
+.xdp-action span.active-drop{color:var(--red);border-color:#6d4444;background:#261a1b}
+.lower{display:grid;grid-template-columns:1.18fr .82fr 1fr;gap:11px;margin-top:11px}
+.panel{border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);overflow:hidden;min-width:0}
+.panel-head{display:flex;align-items:center;justify-content:space-between;gap:9px;padding:9px 11px;border-bottom:1px solid var(--border)}
+.panel-head h2{margin:0;font:10px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.panel-body{padding:11px}
+.source{font:12px/1.55 var(--mono);white-space:pre-wrap;color:#d9dee2}
+.source-note{margin-top:7px;color:var(--faint);font-size:10px}
+.inline-tabs{display:flex;gap:4px}
+.tab{padding:4px 7px;border:1px solid var(--border);border-radius:4px;color:var(--muted);font:10px var(--mono)}
+.tab[aria-selected="true"]{color:var(--text);border-color:var(--border-strong);background:var(--surface-2)}
+.log{margin-top:11px;border-top:1px solid var(--border);font:10px var(--mono);color:var(--muted)}
+.log-row{display:grid;grid-template-columns:46px 1fr;gap:8px;padding:5px 0;border-bottom:1px solid var(--border)}
+.log-time{color:var(--faint)}
+.inspector{display:flex;flex-direction:column;gap:10px}
+.status-row{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.status-row strong{font-size:14px}
+.badge{padding:3px 6px;border:1px solid var(--border);border-radius:4px;color:var(--muted);font:10px var(--mono);white-space:nowrap}
+.badge.success{color:var(--green);border-color:#3b6649}
+.badge.fail{color:var(--red);border-color:#6d4444}
+.inspector-text{font-size:12px;color:var(--muted)}
+.checks{display:grid;gap:4px;font:10px var(--mono);color:var(--muted)}
+.check{padding-left:1px}
+.check.ok{color:var(--green)}
+.check.bad{color:var(--red)}
+.kv{display:grid;grid-template-columns:92px 1fr;gap:5px 10px;font-size:11px}
+.kv .k{color:var(--faint)}
+.kv .v{font-family:var(--mono);word-break:break-word}
+.timeline{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:4px}
+.step{min-height:52px;padding:6px;border:1px solid var(--border);border-radius:4px;text-align:left;color:var(--faint)}
+.step.done{background:var(--surface-2);color:var(--muted)}
+.step.current{border-color:var(--accent);color:var(--text);background:#1c252c}
+.step.fail{border-color:#6d4444;color:var(--red);background:#261a1b}
+.step-num{display:block;font:10px var(--mono);margin-bottom:4px}
+.step-label{display:block;font-size:10px;line-height:1.25}
+.timeline-note,.footer-note{margin-top:8px;color:var(--faint);font-size:10px}
+.events{display:grid;gap:2px}
+.event-row{display:flex;justify-content:space-between;gap:8px;padding:6px 7px;border:1px solid transparent;border-radius:4px;font:10px var(--mono);color:var(--muted);text-align:left}
+.event-row[aria-current="true"]{border-color:var(--border);background:var(--surface-2);color:var(--text)}
+.map-tabs{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px}
+.map-tab{padding:4px 6px;border:1px solid var(--border);border-radius:4px;color:var(--muted);font:10px var(--mono)}
+.map-tab[aria-pressed="true"]{color:var(--text);background:var(--surface-2);border-color:var(--border-strong)}
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font:10px var(--mono)}
+th,td{text-align:left;padding:5px 6px;border-bottom:1px solid var(--border);white-space:nowrap}
+th{color:var(--faint);font-weight:500}
+.map-note{margin:8px 0 0;color:var(--muted);font-size:11px}
+.footline{display:flex;justify-content:space-between;gap:15px;align-items:flex-start;margin-top:10px;color:var(--faint);font-size:10px}
+.snack{position:fixed;right:16px;bottom:16px;max-width:390px;padding:9px 11px;background:#171b1f;border:1px solid var(--border-strong);border-radius:5px;color:var(--muted);opacity:0;transform:translateY(5px);pointer-events:none;transition:opacity 120ms ease,transform 120ms ease}
+.snack.show{opacity:1;transform:none}
+@media (max-width:1080px){
+  .lower{grid-template-columns:1fr 1fr}
+  .lower > :last-child{grid-column:1/-1}
+}
+@media (max-width:780px){
+  .app{padding:13px 14px 22px}
+  .brand span{display:none}
+  .intro{align-items:flex-start;flex-direction:column;gap:9px}
+  .toolbar{grid-template-columns:1fr;align-items:stretch}
+  .control{justify-content:space-between}
+  .control select{min-width:0;width:100%}
+  .action{width:100%}
+  .flow,.kernel-load,.runtime-grid,.xdp-path{grid-template-columns:1fr}
+  .flow-node,.load-node{border-right:0;border-bottom:1px solid var(--border)}
+  .flow-node:last-child,.load-node:last-child{border-bottom:0}
+  .arrow,.runtime-arrow,.xdp-path .path-arrow{min-height:25px;border:0;transform:rotate(90deg)}
+  .arrow.active::before,.runtime-arrow.active::before,.path-arrow.active::before{animation-duration:220ms}
+  .hook-layout{grid-template-columns:1fr;gap:9px}
+  .timeline{grid-template-columns:repeat(2,1fr)}
+  .lower{grid-template-columns:1fr}
+  .lower > :last-child{grid-column:auto}
+  .footline{flex-direction:column}
+}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}.snack{transition:none}}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand"><h1>eBPF Playground</h1><span>Interactive Linux kernel execution model</span></div>
+    <div class="top-actions"><button class="ghost" id="resetBtn">Reset</button></div>
+  </header>
+
+  <div class="intro">
+    <p>Attach a program. Trigger an event. Follow it through the kernel.</p>
+    <div class="mode"><span class="label">mode</span><div class="segmented" aria-label="Execution mode"><button type="button" data-mode="auto" aria-pressed="true">Auto</button><button type="button" data-mode="step" aria-pressed="false">Step</button></div></div>
+  </div>
+
+  <div class="toolbar">
+    <div class="control"><span class="label">scenario</span><select id="scenario" aria-label="Scenario"><option value="syscall">Syscall tracing</option><option value="xdp">Network / XDP</option></select></div>
+    <div class="control"><span class="label">program</span><select id="program" aria-label="Program"><option value="safe">trace_openat — safe</option><option value="unsafe">trace_openat — unsafe</option></select></div>
+    <div></div>
+    <button class="action" id="primaryBtn">Load Program →</button>
+  </div>
+
+  <main class="diagram" aria-label="eBPF execution model">
+    <section class="zone">
+      <div class="zone-header"><div class="zone-title">USER SPACE</div><div class="zone-note" id="userNote">source and loader</div></div>
+      <div class="flow">
+        <div class="flow-node active" data-inspect="app" tabindex="0" role="button" aria-label="Inspect application">
+          <div><div class="flow-label">Application</div><div class="flow-sub" id="appSub">demo workload</div></div>
+          <div class="flow-meta" id="appMeta">openat("/etc/hosts")</div>
+        </div>
+        <div class="arrow" id="uArrow0">→</div>
+        <div class="flow-node" id="programNode" data-inspect="program" tabindex="0" role="button" aria-label="Inspect eBPF program">
+          <div><div class="flow-label">BPF source / object</div><div class="flow-sub" id="programName">trace_openat</div></div>
+          <div class="flow-meta" id="programState">SOURCE</div>
+        </div>
+        <div class="arrow" id="uArrow1">→</div>
+        <div class="flow-node" data-inspect="loader" tabindex="0" role="button" aria-label="Inspect userspace loader">
+          <div><div class="flow-label">Loader / libbpf</div><div class="flow-sub">userspace loader</div></div>
+          <div class="flow-meta">bpf()</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="zone">
+      <div class="zone-header"><div class="zone-title">KERNEL SPACE</div><div class="zone-note" id="kernelNote">load path</div></div>
+      <div class="kernel-load">
+        <div class="load-node" id="verifierNode" data-inspect="verifier" tabindex="0" role="button" aria-label="Inspect BPF verifier"><strong>BPF verifier</strong><span class="flow-sub">program safety</span><span class="state" id="verifierState">WAITING</span></div>
+        <div class="arrow" id="kArrow0">→</div>
+        <div class="load-node" id="jitNode" data-inspect="jit" tabindex="0" role="button" aria-label="Inspect JIT compiler"><strong>JIT compiler</strong><span class="flow-sub">native instructions</span><span class="state" id="jitState">OPTIONAL</span></div>
+        <div class="arrow" id="kArrow1">→</div>
+        <div class="load-node" id="attachNode" data-inspect="hook" tabindex="0" role="button" aria-label="Inspect BPF attachment"><strong id="attachTitle">Attached program</strong><span class="flow-sub" id="attachSub">tracepoint:sys_enter_openat</span><span class="state" id="attachState">DETACHED</span></div>
+      </div>
+      <div class="hook-area">
+        <div class="hook-layout">
+          <div>
+            <div class="label" style="margin-bottom:6px">hook</div>
+            <div class="hook-list" id="hookList">
+              <button class="hook" data-hook="tracepoint" aria-pressed="true">Tracepoint</button>
+              <button class="hook" data-hook="kprobe" aria-pressed="false">kprobe</button>
+              <button class="hook" data-hook="uprobe" aria-pressed="false">uprobe</button>
+              <button class="hook" data-hook="xdp" aria-pressed="false">XDP</button>
+              <button class="hook" data-hook="tc" aria-pressed="false">TC</button>
+              <button class="hook" data-hook="cgroup" aria-pressed="false">cgroup</button>
+              <button class="hook" data-hook="lsm" aria-pressed="false">LSM</button>
+            </div>
+          </div>
+          <div class="hook-info" id="hookInfo">kernel instrumentation point<span class="mono">tracepoint/syscalls/sys_enter_openat</span></div>
+        </div>
+      </div>
+
+      <div class="runtime" id="syscallRuntime">
+        <div class="runtime-grid">
+          <div class="runtime-node" id="eventNode" data-inspect="event" tabindex="0" role="button" aria-label="Inspect runtime event"><strong id="eventSourceTitle">system call</strong><div class="flow-sub" id="eventSourceSub">sys_enter_openat tracepoint</div><div class="flow-meta" id="eventMini">pid=4128 comm=demo</div></div>
+          <div class="runtime-arrow" id="rArrow0">→</div>
+          <div class="event-focus" id="eventFocus" aria-live="polite"><span class="focus-label" id="focusLabel">execution state</span><strong id="focusTitle">Program ready</strong><span id="focusDetail">Load the program to begin.</span></div>
+          <div class="runtime-arrow" id="rArrow1">→</div>
+          <div class="runtime-node" id="outputNode" data-inspect="output" tabindex="0" role="button" aria-label="Inspect BPF output"><strong id="outputTitle">ring buffer</strong><div class="flow-sub" id="outputSub">event metadata → userspace consumer</div><div class="flow-meta" id="outputState">EMPTY</div></div>
+        </div>
+      </div>
+
+      <div class="runtime hidden" id="xdpRuntime">
+        <div class="xdp-path">
+          <div class="path-node" data-inspect="nic" tabindex="0" role="button" aria-label="Inspect incoming packet"><strong>NIC / RX</strong><div class="flow-sub">incoming packet</div><div class="flow-meta">10.0.0.12 → 10.0.0.5</div></div>
+          <div class="path-arrow" id="xdpArrow0">→</div>
+          <div class="path-node" id="xdpNode" data-inspect="xdp" tabindex="0" role="button" aria-label="Inspect XDP hook"><strong>XDP hook</strong><div class="flow-sub">very early receive path</div><div class="xdp-action"><span data-action="pass">XDP_PASS</span><span data-action="drop">XDP_DROP</span><span data-action="redirect">XDP_REDIRECT</span></div></div>
+          <div class="path-arrow" id="xdpArrow1">→</div>
+          <div class="path-node"><strong>Network stack / action</strong><div class="flow-sub" id="xdpOutcome">waiting for packet</div><div class="flow-meta">simulated packet</div></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div class="lower">
+    <section class="panel">
+      <div class="panel-head"><h2>Program</h2><div class="inline-tabs" role="tablist" aria-label="Program example"><button class="tab" role="tab" data-code="safe" aria-selected="true">Safe</button><button class="tab" role="tab" data-code="unsafe" aria-selected="false">Unsafe</button></div></div>
+      <div class="panel-body">
+        <pre class="source" id="sourceCode"></pre>
+        <div class="source-note">Simplified example. Map definitions, includes, error handling, and context details are omitted; it is not a complete buildable program.</div>
+        <div class="label" style="margin:11px 0 5px">load log</div>
+        <div class="log" id="executionLog" aria-live="polite"></div>
+      </div>
+    </section>
+
+    <aside class="panel">
+      <div class="panel-head"><h2>Inspector</h2><span class="badge" id="inspectorBadge">Program</span></div>
+      <div class="panel-body inspector">
+        <div class="status-row"><strong id="inspectTitle">BPF Program</strong><span class="badge" id="inspectStatus">SOURCE</span></div>
+        <div class="inspector-text" id="inspectText">A simplified BPF program selected for a supported hook. Loading and attachment are modeled separately from per-event execution.</div>
+        <div class="checks hidden" id="verifyChecks">
+          <div class="check ok" data-check="flow">✓ valid control flow</div>
+          <div class="check" data-check="mem">✓ safe memory access</div>
+          <div class="check ok" data-check="helper">✓ valid helper usage</div>
+          <div class="check ok" data-check="regs">✓ register/state constraints</div>
+          <div class="check ok" data-check="bounded">✓ bounded execution</div>
+        </div>
+        <div class="kv" id="inspectKV"></div>
+      </div>
+    </aside>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Events</h2><span class="badge">simulated</span></div>
+      <div class="panel-body"><div class="events" id="eventList"></div><div class="footer-note">The current event is highlighted while it propagates through the execution path.</div></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>Execution timeline</h2><span class="badge" id="timelineStatus">program</span></div>
+      <div class="panel-body"><div class="timeline" id="timeline"></div><div class="timeline-note">Program load state persists after an event; event execution is a separate path.</div></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head"><h2>BPF maps / ring buffer</h2><span class="badge" id="mapBadge">open_counts</span></div>
+      <div class="panel-body">
+        <div class="map-tabs" id="mapTabs">
+          <button class="map-tab" data-map="hash" aria-pressed="true">Hash Map</button>
+          <button class="map-tab" data-map="array" aria-pressed="false">Array</button>
+          <button class="map-tab" data-map="percpu" aria-pressed="false">Per-CPU Map</button>
+          <button class="map-tab" data-map="ring" aria-pressed="false">Ring Buffer</button>
+        </div>
+        <div class="table-wrap"><table id="mapTable"></table></div>
+        <p class="map-note" id="mapNote"></p>
+      </div>
+    </section>
+  </div>
+
+  <div class="footline">
+    <span>Mental model: <span class="mono">load → verify → attach → event → execute → communicate</span></span>
+    <span>Typical modern Linux eBPF workflow; implementation details vary by program type, hook, and kernel configuration.</span>
+  </div>
+</div>
+
+<div class="snack" id="snack" role="status" aria-live="polite"></div>
+
+<script>
+(() => {
+  "use strict";
+
+  const reducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const delay = ms => new Promise(resolve => setTimeout(resolve, reducedMotion ? 0 : ms));
+  const $ = id => document.getElementById(id);
+
+  const HOOKS = {
+    tracepoint:{label:"Tracepoint", info:"kernel instrumentation point", attach:"tracepoint/syscalls/sys_enter_openat", eventTitle:"system call", eventSub:"sys_enter_openat tracepoint"},
+    kprobe:{label:"kprobe", info:"kernel function entry instrumentation", attach:"kernel function", eventTitle:"kernel function", eventSub:"selected kprobe target"},
+    uprobe:{label:"uprobe", info:"userspace function instrumentation", attach:"userspace function", eventTitle:"userspace function", eventSub:"selected uprobe target"},
+    xdp:{label:"XDP", info:"very early network receive path", attach:"XDP ingress", eventTitle:"incoming packet", eventSub:"driver / generic XDP path"},
+    tc:{label:"TC", info:"network traffic-control path", attach:"TC ingress / egress", eventTitle:"network packet", eventSub:"traffic-control hook"},
+    cgroup:{label:"cgroup", info:"cgroup-associated hook", attach:"cgroup hook", eventTitle:"cgroup event", eventSub:"selected cgroup hook"},
+    lsm:{label:"LSM", info:"Linux Security Module hook", attach:"LSM hook", eventTitle:"security event", eventSub:"selected LSM hook"}
+  };
+
+  const MAPS = {
+    hash:{name:"open_counts", note:"Key/value storage shared between BPF and userspace. In this simulation, each syscall event increments PID 4128.", headers:["PID","open() count"]},
+    array:{name:"event_slots", note:"Indexed storage with fixed slots. Values here mirror the same simulated event count for comparison.", headers:["INDEX","VALUE"]},
+    percpu:{name:"open_counts_percpu", note:"Per-CPU storage. The simulation increments one CPU row for each syscall event.", headers:["CPU","COUNT"]},
+    ring:{name:"events", note:"BPF_MAP_TYPE_RINGBUF: a streaming event channel presented through the BPF map infrastructure; it is not a key/value map.", headers:["SLOT","EVENT"]}
+  };
+
+  const PROGRAMS = {
+    safe:`SEC("tracepoint/syscalls/sys_enter_openat")\nint trace_openat(void *ctx)\n{\n    // simplified: update open_counts[pid]\n    // simplified: submit event metadata to ringbuf\n    return 0;\n}`,
+    unsafe:`SEC("tracepoint/syscalls/sys_enter_openat")\nint trace_openat(void *ctx)\n{\n    // conceptual verifier failure\n    char *p = (char *)ctx;\n    return p[1024];\n}`
+  };
+
+  const state = {
+    scenario:"syscall",
+    hook:"tracepoint",
+    program:"safe",
+    mode:"auto",
+    loadStage:"source",
+    loadFocus:null,
+    eventStage:"idle",
+    eventFocus:null,
+    eventSeq:42,
+    events:[
+      {seq:42,kind:"openat",pid:4128,comm:"demo",path:"/etc/hosts"},
+      {seq:41,kind:"openat",pid:913,comm:"demo",path:"/etc/hosts"},
+      {seq:40,kind:"openat",pid:4128,comm:"demo",path:"/etc/hosts"}
+    ],
+    selectedEvent:null,
+    mapType:"hash",
+    mapCounts:{4128:17,913:8,7421:3},
+    cpuCounts:[9,5,4],
+    arrayValues:[17,8,3],
+    packetAction:null,
+    inspector:"program",
+    busy:false,
+    runToken:0
+  };
+
+  const TIMELINES = {
+    syscall:["Program loaded","Verifier passed","JIT stage (if enabled)","Attached","Event triggered","BPF executed","Map / ring buffer","Userspace consumed"],
+    xdp:["Program loaded","Verifier passed","JIT stage (if enabled)","Attached","Packet received","XDP executed","Action returned","Path continues / stops"]
+  };
+
+  function setSnack(msg){
+    const el=$("snack");
+    el.textContent=msg;
+    el.classList.add("show");
+    clearTimeout(setSnack.timer);
+    setSnack.timer=setTimeout(()=>el.classList.remove("show"),2200);
+  }
+
+  function isRejected(){return state.loadStage==="rejected"}
+  function isAttached(){return state.loadStage==="attached"}
+
+  function lifecycleLabel(){
+    if(isRejected()) return "REJECTED";
+    return ({source:"SOURCE",bytecode:"BYTECODE",verified:"VERIFIED",jit:"JIT STAGE",attached:"ATTACHED"})[state.loadStage];
+  }
+
+  function resetRun(){
+    state.runToken++;
+    state.busy=false;
+    state.loadStage="source";
+    state.loadFocus=null;
+    state.eventStage="idle";
+    state.eventFocus=null;
+    state.eventSeq=42;
+    state.events=[
+      {seq:42,kind:"openat",pid:4128,comm:"demo",path:"/etc/hosts"},
+      {seq:41,kind:"openat",pid:913,comm:"demo",path:"/etc/hosts"},
+      {seq:40,kind:"openat",pid:4128,comm:"demo",path:"/etc/hosts"}
+    ];
+    state.selectedEvent=null;
+    state.mapCounts={4128:17,913:8,7421:3};
+    state.cpuCounts=[9,5,4];
+    state.arrayValues=[17,8,3];
+    state.packetAction=null;
+    setInteractionLock(false);
+  }
+
+  function selectedEvent(){return state.events.find(e=>e.seq===state.selectedEvent)||null}
+
+  function setProgram(value){
+    state.program=value;
+    resetRun();
+    state.inspector="program";
+    updateAll();
+  }
+
+  function setScenario(value){
+    state.scenario=value;
+    state.hook=value==="xdp"?"xdp":"tracepoint";
+    resetRun();
+    state.inspector="program";
+    updateAll();
+  }
+
+  function setInteractionLock(locked){
+    [$("scenario"),$("program"),...document.querySelectorAll(".hook"),...document.querySelectorAll("[data-mode]"),...document.querySelectorAll("[data-code]")].forEach(el=>{
+      if(el) el.disabled=locked;
+    });
+  }
+
+  function setHook(value){
+    state.hook=value;
+    if(value==="xdp") state.scenario="xdp";
+    else if(state.scenario==="xdp") state.scenario="syscall";
+    resetRun();
+    state.inspector="hook";
+    updateAll();
+  }
+
+  function sourceForScenario(){
+    if(state.scenario==="xdp"){
+      return state.program==="unsafe"
+        ? `SEC("xdp")\nint packet_policy(struct xdp_md *ctx)\n{\n    // conceptual verifier failure\n    return *(void **)(ctx);\n}`
+        : `SEC("xdp")\nint packet_policy(struct xdp_md *ctx)\n{\n    // simplified packet policy\n    return XDP_PASS;\n}`;
+    }
+    return PROGRAMS[state.program];
+  }
+
+  function unsafeReason(){return state.scenario==="xdp"?"potential invalid access through the XDP context":"potential out-of-bounds memory access"}
+
+  function focus(type, visualClass="active"){
+    document.querySelectorAll(".flow-node,.load-node,.runtime-node,.path-node").forEach(el=>el.classList.remove("active","success","fail"));
+    if(!type) return;
+    const selectors={app:'[data-inspect="app"]',program:'#programNode',loader:'[data-inspect="loader"]',verifier:'#verifierNode',jit:'#jitNode',hook:'#attachNode',event:'#eventNode',output:'#outputNode',nic:'[data-inspect="nic"]',xdp:'#xdpNode'};
+    const el=document.querySelector(selectors[type]||"");
+    if(el) el.classList.add(visualClass);
+  }
+
+  function focusArrow(id){document.querySelectorAll(".arrow,.runtime-arrow").forEach(el=>el.classList.remove("active")); if(id) $(id)?.classList.add("active")}
+
+  async function loadAuto(){
+    clearLog();
+    const token=state.runToken;
+    state.busy=true;
+    setInteractionLock(true);
+
+    state.loadStage="bytecode";
+    state.loadFocus="loader";
+    focus("loader"); focusArrow("uArrow1");
+    setLoadNarration("BPF bytecode enters the kernel loading path.", "userspace → kernel");
+    addLog("t+00","invoking bpf() with BPF bytecode"); updateAll();
+    await delay(320); if(token!==state.runToken)return;
+
+    state.loadStage="bytecode";
+    state.loadFocus="verifier";
+    focus("verifier"); focusArrow("kArrow0");
+    setLoadNarration("The kernel verifier is checking the program.", "userspace → kernel");
+    addLog("t+320","verifier checking program"); updateAll();
+    await delay(380); if(token!==state.runToken)return;
+
+    if(state.program==="unsafe"){
+      rejectProgram();
+      return;
+    }
+
+    state.loadStage="verified";
+    setLoadNarration("Verifier accepted the program; it can continue through the load path.", "kernel");
+    addLog("t+700","verification successful"); updateAll();
+    await delay(300); if(token!==state.runToken)return;
+
+    state.loadStage="jit";
+    state.loadFocus="jit";
+    focus("jit"); focusArrow("kArrow1");
+    setLoadNarration("JIT stage: native translation is used when JIT is enabled.", "kernel");
+    addLog("t+1000","JIT stage (if enabled)"); updateAll();
+    await delay(360); if(token!==state.runToken)return;
+
+    state.loadStage="attached";
+    state.loadFocus="hook";
+    focus("hook","success"); focusArrow(null);
+    setLoadNarration(`Program is now attached to ${HOOKS[state.hook].attach} and waits for its event.`, "kernel");
+    addLog("t+1360","program attached to "+HOOKS[state.hook].attach);
+    state.busy=false;
+    setInteractionLock(false);
+    updateAll();
+    setSnack("Program verified and attached.");
+  }
+
+  function rejectProgram(){
+    state.loadStage="rejected";
+    state.loadFocus="verifier";
+    state.busy=false;
+    setInteractionLock(false);
+    focus("verifier","fail"); focusArrow(null);
+    setLoadNarration("Verifier rejected the program. The load path stops here.", "kernel");
+    addLog("t+700","verifier rejected program");
+    updateAll();
+    setSnack("Verifier rejected program: "+unsafeReason()+".");
+  }
+
+  function advanceLoadStep(){
+    if(state.busy)return;
+    if(state.loadStage==="source"){
+      state.loadStage="bytecode"; state.loadFocus="loader";
+      focus("loader"); focusArrow("uArrow1");
+      setLoadNarration("BPF bytecode was handed from userspace to the kernel through bpf().", "userspace → kernel");
+      addLog("step","bpf() invoked with BPF bytecode");
+    } else if(state.loadStage==="bytecode"){
+      state.loadStage="verified"; state.loadFocus="verifier";
+      if(state.program==="unsafe"){
+        rejectProgram();
+        return;
+      }
+      focus("verifier"); focusArrow("kArrow0");
+      setLoadNarration("Verifier accepted the program.", "kernel");
+      addLog("step","verification successful");
+    } else if(state.loadStage==="verified"){
+      state.loadStage="jit"; state.loadFocus="jit";
+      focus("jit"); focusArrow("kArrow1");
+      setLoadNarration("JIT stage: native translation is used when JIT is enabled.", "kernel");
+      addLog("step","JIT stage reached (if enabled)");
+    } else if(state.loadStage==="jit"){
+      state.loadStage="attached"; state.loadFocus="hook";
+      focus("hook","success"); focusArrow(null);
+      setLoadNarration(`Program attached to ${HOOKS[state.hook].attach}; waiting for the event.`, "kernel");
+      addLog("step","program attached to "+HOOKS[state.hook].attach);
+      setSnack("Program verified and attached.");
+    }
+    updateAll();
+  }
+
+  function setLoadNarration(_detail,boundary){
+    $("userNote").textContent=boundary==="userspace → kernel"?"bpf() → kernel":"program in kernel";
+    $("kernelNote").textContent=boundary;
+  }
+
+  async function triggerAuto(){
+    const token=state.runToken;
+    state.busy=true;
+    setInteractionLock(true);
+    state.eventStage="triggered";
+    state.eventFocus="event";
+    state.eventSeq++;
+    state.selectedEvent=state.eventSeq;
+    const newEvent={seq:state.eventSeq,kind:state.scenario==="xdp"?"packet":"openat",pid:4128,comm:"demo",path:"/etc/hosts"};
+    state.events.unshift(newEvent); state.events=state.events.slice(0,4);
+    addLog("t+00",state.scenario==="xdp"?"packet reached XDP":"openat event reached selected hook");
+    setEventNarration("Event reached the attached hook.", "kernel execution");
+    updateAll(); await delay(300); if(token!==state.runToken)return;
+
+    state.eventStage="executing"; state.eventFocus="program";
+    focus("program"); focusArrow("rArrow0");
+    setEventNarration(state.scenario==="xdp"?"XDP program is executing at the receive hook.":"Attached BPF program is executing at the tracepoint.", "kernel execution");
+    addLog("t+300","eBPF program executed"); updateAll(); await delay(340); if(token!==state.runToken)return;
+
+    state.eventStage="emitted"; state.eventFocus=state.scenario==="xdp"?"xdp":"output";
+    state.packetAction=state.scenario==="xdp"?"pass":null;
+    if(state.scenario==="syscall")incrementData();
+    focus(state.scenario==="xdp"?"xdp":"output", "active"); focusArrow("rArrow1");
+    setEventNarration(state.scenario==="xdp"?"XDP_PASS was returned; the kernel continues the packet path.":"Event metadata was published to the ring buffer.", state.scenario==="xdp"?"kernel":"kernel → userspace");
+    addLog("t+640",state.scenario==="xdp"?"XDP_PASS returned":"event written to ring buffer"); updateAll(); await delay(360); if(token!==state.runToken)return;
+
+    state.eventStage="consumed"; state.eventFocus=state.scenario==="xdp"?"xdp":"output";
+    state.busy=false;
+    setInteractionLock(false);
+    focus(state.scenario==="xdp"?"xdp":"output", "success"); focusArrow(state.scenario==="xdp"?null:"rArrow1");
+    setEventNarration(state.scenario==="xdp"?"The kernel follows XDP_PASS; there is no userspace output on this path.":"The userspace consumer read the event from the ring buffer.", state.scenario==="xdp"?"kernel":"kernel → userspace");
+    addLog("t+1000",state.scenario==="xdp"?"kernel follows XDP action":"userspace consumer received event"); updateAll();
+  }
+
+  function triggerStep(){
+    if(state.busy)return;
+    if(state.eventStage==="idle"||state.eventStage==="consumed"){
+      state.eventStage="triggered"; state.eventFocus="event"; state.eventSeq++; state.selectedEvent=state.eventSeq;
+      state.events.unshift({seq:state.eventSeq,kind:state.scenario==="xdp"?"packet":"openat",pid:4128,comm:"demo",path:"/etc/hosts"}); state.events=state.events.slice(0,4);
+      addLog("step",state.scenario==="xdp"?"packet reached XDP":"openat event reached selected hook");
+      setEventNarration("Event reached the attached hook.", "kernel execution");
+    } else if(state.eventStage==="triggered"){
+      state.eventStage="executing"; state.eventFocus="program";
+      focus("program"); focusArrow("rArrow0");
+      setEventNarration(state.scenario==="xdp"?"XDP program is executing at the receive hook.":"Attached BPF program is executing at the tracepoint.", "kernel execution");
+      addLog("step","eBPF program executed");
+    } else if(state.eventStage==="executing"){
+      state.eventStage="emitted"; state.eventFocus=state.scenario==="xdp"?"xdp":"output"; state.packetAction=state.scenario==="xdp"?"pass":null;
+      if(state.scenario==="syscall")incrementData();
+      focus(state.scenario==="xdp"?"xdp":"output", "active"); focusArrow("rArrow1");
+      setEventNarration(state.scenario==="xdp"?"XDP_PASS was returned; the kernel continues the packet path.":"Event metadata was published to the ring buffer.", state.scenario==="xdp"?"kernel":"kernel → userspace");
+      addLog("step",state.scenario==="xdp"?"XDP_PASS returned":"event written to ring buffer");
+    } else if(state.eventStage==="emitted"){
+      state.eventStage="consumed"; state.eventFocus=state.scenario==="xdp"?"xdp":"output"; state.busy=false; setInteractionLock(false);
+      focus(state.scenario==="xdp"?"xdp":"output", "success"); focusArrow(state.scenario==="xdp"?null:"rArrow1");
+      setEventNarration(state.scenario==="xdp"?"The kernel follows XDP_PASS; there is no userspace output on this path.":"The userspace consumer read the event from the ring buffer.", state.scenario==="xdp"?"kernel":"kernel → userspace");
+      addLog("step",state.scenario==="xdp"?"kernel follows XDP action":"userspace consumer received event");
+    }
+    updateAll();
+  }
+
+  function setEventNarration(_detail,boundary){
+    $("userNote").textContent=boundary==="kernel → userspace"?"userspace consumer":"application → kernel";
+    $("kernelNote").textContent=boundary;
+  }
+
+  function incrementData(){
+    state.mapCounts[4128]=(state.mapCounts[4128]||0)+1;
+    state.arrayValues=[state.arrayValues[0]+1,state.arrayValues[1],state.arrayValues[2]];
+    state.cpuCounts=[state.cpuCounts[0]+1,state.cpuCounts[1],state.cpuCounts[2]];
+  }
+
+  function addLog(time,msg){
+    const el=$("executionLog");
+    const row=document.createElement("div"); row.className="log-row";
+    row.innerHTML=`<span class="log-time">${time}</span><span>${msg}</span>`; el.appendChild(row);
+    while(el.children.length>8) el.removeChild(el.firstChild);
+  }
+
+  function clearLog(){$("executionLog").innerHTML=""}
+
+  function primaryAction(){
+    if(state.busy)return;
+    if(isRejected()){
+      resetRun();
+      clearLog();
+      updateAll();
+      return;
+    }
+    if(!isAttached()){
+      if(state.mode==="step") advanceLoadStep();
+      else if(state.loadStage==="source") loadAuto();
+      return;
+    }
+    if(state.mode==="step") triggerStep();
+    else if(state.eventStage!=="triggered"&&state.eventStage!=="executing"&&state.eventStage!=="emitted") triggerAuto();
+  }
+
+  function primaryText(){
+    if(state.busy){
+      if(!isAttached()){
+        if(state.loadFocus==="loader")return "Loading…";
+        if(state.loadFocus==="verifier")return "Verifying…";
+        if(state.loadFocus==="jit")return "JIT stage…";
+        if(state.loadFocus==="hook")return "Attaching…";
+        return "Loading…";
+      }
+      if(state.eventStage==="triggered")return "Triggering…";
+      if(state.eventStage==="executing")return "Executing…";
+      if(state.eventStage==="emitted")return state.scenario==="xdp"?"Applying…":"Delivering…";
+      return "Running…";
+    }
+    if(isRejected())return "Reset Program";
+    if(!isAttached())return state.mode==="step"?"Next →":"Load Program →";
+    if(state.mode==="step"&&state.eventStage!=="idle"&&state.eventStage!=="consumed")return "Next →";
+    return state.scenario==="xdp"?"Send Packet →":"Trigger Event →";
+  }
+
+  function focusForCurrent(){
+    if(isRejected())return ["verifier","fail"];
+    if(state.eventStage!=="idle"&&isAttached()){
+      if(state.eventStage==="triggered")return ["event","active"];
+      if(state.eventStage==="executing")return ["program","active"];
+      if(state.eventStage==="emitted")return [state.scenario==="xdp"?"xdp":"output","active"];
+      return [state.scenario==="xdp"?"xdp":"output","success"];
+    }
+    if(state.loadFocus)return [state.loadFocus,state.loadStage==="attached"?"success":"active"];
+    if(isAttached())return ["hook","success"];
+    return ["program","active"];
+  }
+
+  function updateProgramSelect(){
+    const select=$("program");
+    const label=state.scenario==="xdp"?"packet_policy":"trace_openat";
+    const current=state.program;
+    select.innerHTML=`<option value="safe">${label} — safe</option><option value="unsafe">${label} — unsafe</option>`;
+    select.value=current;
+  }
+
+  function updateDiagram(){
+    const h=HOOKS[state.hook];
+    $("scenario").value=state.scenario;
+    updateProgramSelect();
+    $("programName").textContent=state.scenario==="xdp"?"packet_policy":"trace_openat";
+    $("programState").textContent=lifecycleLabel();
+    $("attachSub").textContent=h.attach;
+    $("hookInfo").innerHTML=`${h.info}<span class="mono">${h.attach}</span>`;
+    $("verifierState").textContent=isRejected()?"REJECTED":state.loadFocus==="verifier"&&state.loadStage==="bytecode"?"CHECKING":state.loadStage==="verified"||state.loadStage==="jit"||state.loadStage==="attached"?"PASSED":"WAITING";
+    $("jitState").textContent=state.loadStage==="jit"?"CURRENT":state.loadStage==="attached"?"COMPLETED":"OPTIONAL";
+    $("attachState").textContent=isAttached()?"ATTACHED":"DETACHED";
+    $("kernelNote").textContent=isAttached()?"program resident; waiting for events":"load path";
+
+    document.querySelectorAll(".hook").forEach(b=>{
+      const selected=b.dataset.hook===state.hook;
+      b.setAttribute("aria-pressed",String(selected));
+    });
+
+    $("syscallRuntime").classList.toggle("hidden",state.scenario!=="syscall");
+    $("xdpRuntime").classList.toggle("hidden",state.scenario!=="xdp");
+    $("eventSourceTitle").textContent=h.eventTitle;
+    $("eventSourceSub").textContent=h.eventSub;
+    const currentEvent=selectedEvent();
+    $("eventMini").textContent=state.scenario==="xdp"
+      ? (currentEvent?`#${String(currentEvent.seq).padStart(4,"0")} TCP / dport 443`:"TCP / dport 443")
+      : (currentEvent?`#${String(currentEvent.seq).padStart(4,"0")} pid=${currentEvent.pid} syscall=${currentEvent.kind}`:"pid=4128 comm=demo syscall=openat");
+    $("appSub").textContent=state.scenario==="xdp"?"network workload":"demo workload";
+    $("appMeta").textContent=state.scenario==="xdp"?"send packet":'openat("/etc/hosts")';
+
+    $("sourceCode").textContent=sourceForScenario();
+
+    const [key,kind]=focusForCurrent();
+    focus(key,kind); focusArrow(null);
+    if(key==="loader") focusArrow("uArrow1");
+    if(key==="jit") focusArrow("kArrow0");
+    if(key==="hook") focusArrow("kArrow1");
+    if(state.scenario==="syscall") {
+      if(state.eventStage==="triggered"||state.eventStage==="executing") focusArrow("rArrow0");
+      if(state.eventStage==="emitted"||state.eventStage==="consumed") focusArrow("rArrow1");
+    } else {
+      if(state.eventStage==="triggered"||state.eventStage==="executing") focusArrow("xdpArrow0");
+      if(state.eventStage==="emitted"||state.eventStage==="consumed") focusArrow("xdpArrow1");
+    }
+
+    if(state.eventStage==="idle"){
+      if(state.loadStage==="bytecode") $("userNote").textContent="bpf() → kernel";
+      else if(state.loadStage==="verified"||state.loadStage==="jit") $("userNote").textContent="program in kernel";
+      else if(state.loadStage==="attached") $("userNote").textContent="program remains in kernel";
+      else $("userNote").textContent="source and loader";
+      $("kernelNote").textContent=isAttached()?"attached; waiting for event":"load path";
+    } else if(state.eventStage==="triggered"||state.eventStage==="executing"){
+      $("userNote").textContent=state.scenario==="xdp"?"network source":"application → kernel";
+      $("kernelNote").textContent="kernel execution";
+    } else {
+      $("userNote").textContent=state.scenario==="xdp"?"no userspace output":"userspace consumer";
+      $("kernelNote").textContent=state.scenario==="xdp"?"kernel action":"kernel → userspace";
+    }
+
+    if(state.eventStage!=="idle"){
+      $("eventNode").classList.toggle("active",state.eventFocus==="event");
+      $("outputNode").classList.toggle("active",state.eventFocus==="output");
+      $("outputNode").classList.toggle("success",state.eventStage==="consumed"&&state.scenario==="syscall");
+    }
+
+    $("focusTitle").textContent=currentFocusTitle();
+    $("focusDetail").textContent=currentFocusDetail();
+    $("focusLabel").textContent=state.eventStage!=="idle"?"current execution":"current load stop";
+    $("outputState").textContent=state.eventStage==="emitted"?"EVENT READY":state.eventStage==="consumed"?"READ BY USERSPACE":"EMPTY";
+    $("outputSub").textContent=state.eventStage==="consumed"?"kernel ring buffer → userspace consumer":"event metadata → kernel ring buffer";
+    $("outputTitle").textContent="ring buffer";
+
+    document.querySelectorAll("[data-action]").forEach(el=>el.className="");
+    if(state.packetAction==="pass") document.querySelector('[data-action="pass"]').classList.add("active-pass");
+    if(state.packetAction==="drop") document.querySelector('[data-action="drop"]').classList.add("active-drop");
+    $("xdpOutcome").textContent=state.packetAction==="pass"?"packet continues into the kernel network path":state.packetAction==="drop"?"packet is dropped":state.packetAction==="redirect"?"packet is redirected":"waiting for packet";
+  }
+
+
+  function currentFocusTitle(){
+    const ev=selectedEvent();
+    const eventId=ev?` #${String(ev.seq).padStart(4,"0")}`:"";
+    if(isRejected())return "VERIFICATION FAILED";
+    if(state.eventStage==="triggered")return state.scenario==="xdp"?`Packet reached XDP${eventId}`:`openat event reached hook${eventId}`;
+    if(state.eventStage==="executing")return state.scenario==="xdp"?`XDP program executing${eventId}`:`eBPF program executing${eventId}`;
+    if(state.eventStage==="emitted")return state.scenario==="xdp"?"XDP_PASS returned":`Event published to ring buffer${eventId}`;
+    if(state.eventStage==="consumed")return state.scenario==="xdp"?"Action applied":`Userspace consumed event${eventId}`;
+    if(state.loadFocus==="verifier"&&state.loadStage==="bytecode")return "Verifier checking";
+    if(state.loadStage==="bytecode")return "BPF bytecode loaded";
+    if(state.loadStage==="verified")return "Verifier accepted";
+    if(state.loadStage==="jit")return "JIT stage";
+    if(state.loadStage==="attached")return "Program attached";
+    return "Program ready";
+  }
+
+  function currentFocusDetail(){
+    const ev=selectedEvent();
+    const eventId=ev?` Event #${String(ev.seq).padStart(4,"0")}.`:"";
+    if(isRejected())return unsafeReason()+"; the load path stops before JIT and attachment.";
+    if(state.eventStage==="triggered")return state.scenario==="xdp"?`The packet entered the early receive path.${eventId}`:`The selected tracepoint was reached by the simulated workload.${eventId}`;
+    if(state.eventStage==="executing")return state.scenario==="xdp"?`Execution is at XDP in the kernel receive path.${eventId}`:`Execution is at the attached hook in kernel context.${eventId}`;
+    if(state.eventStage==="emitted")return state.scenario==="xdp"?"XDP_PASS stays in the kernel path.":`The event crosses kernel → userspace through the ring buffer.${eventId}`;
+    if(state.eventStage==="consumed")return state.scenario==="xdp"?"The kernel follows the XDP action; userspace is not required.":`The userspace consumer read the event from the ring buffer.${eventId}`;
+    if(state.loadFocus==="verifier"&&state.loadStage==="bytecode")return "The kernel verifier is checking the program; the next stop is acceptance or rejection.";
+    if(state.loadStage==="bytecode")return "The loader passed BPF bytecode through bpf(); the next stop is the verifier.";
+    if(state.loadStage==="verified")return "The verifier accepted the program; the next stop is the JIT stage.";
+    if(state.loadStage==="jit")return "Native translation may occur here when JIT is enabled; the next stop is attachment.";
+    if(state.loadStage==="attached")return `The program is attached to ${HOOKS[state.hook].attach}. Trigger the event to execute it.`;
+    return "Choose Load Program to start the load → verify → JIT → attach sequence.";
+  }
+
+  function updateProgramChecks(){
+    const show=state.loadStage!=="source";
+    $("verifyChecks").classList.toggle("hidden",!show);
+    document.querySelectorAll("[data-check]").forEach(el=>el.classList.remove("ok","bad"));
+    if(state.program==="unsafe" && isRejected()){
+      $("verifyChecks").querySelector('[data-check="flow"]').classList.add("ok");
+      $("verifyChecks").querySelector('[data-check="mem"]').classList.add("bad");
+      $("verifyChecks").querySelector('[data-check="helper"]').classList.add("ok");
+      $("verifyChecks").querySelector('[data-check="regs"]').classList.add("ok");
+      $("verifyChecks").querySelector('[data-check="bounded"]').classList.add("ok");
+    } else if(show){document.querySelectorAll("[data-check]").forEach(el=>el.classList.add("ok"));}
+  }
+
+  function updateInspector(){
+    const ev=selectedEvent(); const h=HOOKS[state.hook];
+    const data={
+      app:{title:"Application",status:"USER SPACE",text:"The workload causes the event. It does not call an already-attached BPF program like a normal function.",kv:[["role","demo workload"],["action",state.scenario==="xdp"?"send packet":'openat("/etc/hosts")']]},
+      program:{title:"BPF source / object",status:lifecycleLabel(),text:"A simplified program selected for the current scenario. Load/verification state persists independently from the execution of individual events.",kv:[["name",state.scenario==="xdp"?"packet_policy":"trace_openat"],["hook type",h.label],["state",lifecycleLabel()]]},
+      loader:{title:"Userspace loader",status:state.loadStage!=="source"?"CALLED":"WAITING",text:"libbpf commonly opens the compiled BPF object, prepares it, and uses the bpf() system call to load BPF objects into the kernel.",kv:[["interface","bpf()"],["layer","userspace → kernel"]]},
+      verifier:{title:"BPF Verifier",status:isRejected()?"REJECTED":state.loadStage!=="source"?"PASSED":"WAITING",text:"The verifier validates control-flow and state/memory constraints before a program is accepted. A rejected program does not continue to attachment.",kv:[["purpose","safety checks"],["result",isRejected()?unsafeReason():"accepted"]]},
+      jit:{title:"JIT compiler",status:state.loadStage==="jit"||state.loadStage==="attached"?"OPTIONAL STAGE":"WAITING",text:"The kernel can translate verified BPF instructions to native instructions when JIT is enabled. It is not the verifier.",kv:[["position","after verification"],["behavior","configuration-dependent"]]},
+      hook:{title:"Hook",status:isAttached()?"ATTACHED":"DETACHED",text:`${h.label} changes where the program is invoked. Hook types do not all expose the same context or return semantics.`,kv:[["type",h.label],["attach point",h.attach]]},
+      event:{title:"Event",status:ev?"SELECTED":"READY",text:ev?(state.scenario==="xdp"?"A simulated packet at the XDP boundary.":"A simulated syscall event at the selected instrumentation point."):"No event selected.",kv:ev?(state.scenario==="xdp"?[["event",`#${String(ev.seq).padStart(4,"0")}`],["src","10.0.0.12"],["dst","10.0.0.5"],["protocol","TCP"],["dport","443"],["values","simulated"]]:[["event",`#${String(ev.seq).padStart(4,"0")}`],["pid",ev.pid],["comm",ev.comm],["syscall",ev.kind],["path",ev.path],["values","simulated"]]):[]},
+      output:{title:"Ring buffer",status:state.eventStage==="emitted"?"EVENT READY":state.eventStage==="consumed"?"READ BY USERSPACE":"EMPTY",text:"The ring buffer is a BPF map type used here as a streaming event channel to userspace. It is not a hash/array key-value map.",kv:[["type","BPF_MAP_TYPE_RINGBUF"],["direction","BPF → userspace"],["event",ev?`#${String(ev.seq).padStart(4,"0")}`:"none"]]},
+      nic:{title:"NIC / RX",status:state.packetAction?"PROCESSED":"READY",text:"XDP is shown on the early receive path, before the packet continues through the normal network stack when XDP_PASS is returned.",kv:[["src","10.0.0.12"],["dst","10.0.0.5"],["protocol","TCP"],["dport","443"]]},
+      xdp:{title:"XDP",status:state.packetAction==="pass"?"XDP_PASS":state.packetAction==="drop"?"XDP_DROP":"READY",text:"The XDP program returns an action such as PASS, DROP, or REDIRECT. The return action is handled in the kernel path.",kv:[["action",state.packetAction?state.packetAction.toUpperCase()==="PASS"?"XDP_PASS":"XDP_"+state.packetAction.toUpperCase():"not triggered"],["position","early receive path"]]}
+    };
+    const d=data[state.inspector]||data.program;
+    $("inspectTitle").textContent=d.title;
+    $("inspectStatus").textContent=d.status;
+    $("inspectStatus").className="badge"+(d.status.includes("PASSED")||d.status.includes("ATTACHED")||d.status.includes("READY")||d.status==="XDP_PASS"?" success":"")+(d.status.includes("REJECTED")||d.status==="XDP_DROP"?" fail":"");
+    $("inspectText").textContent=d.text;
+    $("inspectKV").innerHTML=d.kv.map(([k,v])=>`<div class="k">${k}</div><div class="v">${v}</div>`).join("");
+    $("inspectorBadge").textContent=d.title;
+  }
+
+  function updateEvents(){
+    const list=$("eventList"); list.innerHTML="";
+    state.events.forEach(ev=>{
+      const row=document.createElement("div");
+      row.className="event-row"+(state.selectedEvent===ev.seq?" selected":"");
+      row.setAttribute("aria-current",String(state.selectedEvent===ev.seq));
+      row.innerHTML=`<span>#${String(ev.seq).padStart(4,"0")} ${ev.kind}</span><span>pid ${ev.pid}</span>`;
+      list.appendChild(row);
+    });
+  }
+
+  function updateMap(){
+    const type=state.mapType; const meta=MAPS[type]; $("mapBadge").textContent=meta.name; $("mapNote").textContent=meta.note;
+    document.querySelectorAll(".map-tab").forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.map===type)));
+    let rows=[];
+    if(type==="hash") rows=Object.entries(state.mapCounts).map(([pid,count])=>[pid,String(count)]);
+    if(type==="array") rows=state.arrayValues.map((v,i)=>[String(i),String(v)]);
+    if(type==="percpu") rows=state.cpuCounts.map((v,i)=>[String(i),String(v)]);
+    if(type==="ring") rows=state.events.slice(0,3).map((e,i)=>[String(e.seq).padStart(3,"0"),`${e.kind}${i===0?" ← newest":""}`]);
+    $("mapTable").innerHTML=`<thead><tr>${meta.headers.map(h=>`<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.map(r=>`<tr>${r.map(c=>`<td>${c}</td>`).join("")}</tr>`).join("")}</tbody>`;
+  }
+
+  function currentTimelineIndex(){
+    if(isRejected())return 1;
+    if(state.eventStage==="consumed")return 7;
+    if(state.eventStage==="emitted")return 6;
+    if(state.eventStage==="executing")return 5;
+    if(state.eventStage==="triggered")return 4;
+    if(state.loadStage==="attached")return 3;
+    if(state.loadStage==="jit")return 2;
+    if(state.loadStage==="verified")return 1;
+    if(state.loadStage==="bytecode")return 0;
+    return -1;
+  }
+
+  function updateTimeline(){
+    const labels=TIMELINES[state.scenario];
+    const current=currentTimelineIndex();
+    const timeline=$("timeline"); timeline.innerHTML="";
+    $("timelineStatus").textContent=isRejected()?"verifier rejected":current<4?"load":"event";
+    labels.forEach((label,i)=>{
+      const b=document.createElement("div"); b.className="step";
+      if(i<current)b.classList.add("done");
+      if(i===current)b.classList.add("current");
+      if(isRejected()&&i===1)b.classList.add("fail");
+      const shownLabel=(isRejected()&&i===1)?"Verifier rejected":label;
+      b.innerHTML=`<span class="step-num">${i+1}</span><span class="step-label">${shownLabel}</span>`;
+      timeline.appendChild(b);
+    });
+  }
+
+  function updateAll(){
+    if(state.eventStage!=="idle"){
+      state.inspector = state.eventStage==="triggered" ? "event" : state.eventStage==="executing" ? "program" : state.scenario==="xdp" ? "xdp" : "output";
+    } else if(isRejected()){
+      state.inspector="verifier";
+    } else if(state.loadFocus){
+      state.inspector = state.loadFocus==="loader"?"loader":state.loadFocus==="verifier"?"verifier":state.loadFocus==="jit"?"jit":state.loadFocus==="hook"?"hook":"program";
+    }
+    updateDiagram(); updateProgramChecks(); updateInspector(); updateEvents(); updateMap(); updateTimeline();
+    const setupLocked=state.busy || (!isRejected() && state.loadStage!=="source" && !(isAttached() && (state.eventStage==="idle" || state.eventStage==="consumed")));
+    [$("scenario"),$("program"),...document.querySelectorAll(".hook"),...document.querySelectorAll("[data-mode]"),...document.querySelectorAll("[data-code]")].forEach(el=>{if(el)el.disabled=setupLocked;});
+    $("primaryBtn").textContent=primaryText(); $("primaryBtn").disabled=state.busy;
+    $("primaryBtn").classList.toggle("danger",isRejected());
+    document.querySelectorAll("[data-mode]").forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.mode===state.mode)));
+    document.querySelectorAll("[data-code]").forEach(b=>b.setAttribute("aria-selected",String(b.dataset.code===state.program)));
+
+  }
+
+  document.querySelectorAll("[data-inspect]").forEach(el=>{
+    const inspect=()=>{state.inspector=el.dataset.inspect;updateInspector();};
+    el.addEventListener("click",inspect);
+    el.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();inspect();}});
+  });
+
+  document.querySelectorAll(".hook").forEach(b=>b.addEventListener("click",()=>setHook(b.dataset.hook)));
+  document.querySelectorAll("[data-mode]").forEach(b=>b.addEventListener("click",()=>{state.mode=b.dataset.mode;updateAll();setSnack(state.mode==="step"?"Step mode: advance the state manually.":"Auto mode: lifecycle advances automatically.");}));
+  document.querySelectorAll("[data-code]").forEach(b=>b.addEventListener("click",()=>setProgram(b.dataset.code)));
+  document.querySelectorAll(".map-tab").forEach(b=>b.addEventListener("click",()=>{state.mapType=b.dataset.map;updateMap();}));
+  $("scenario").addEventListener("change",e=>setScenario(e.target.value));
+  $("program").addEventListener("change",e=>setProgram(e.target.value));
+  $("primaryBtn").addEventListener("click",primaryAction);
+  $("resetBtn").addEventListener("click",()=>{state.scenario=$("scenario").value;state.hook=state.scenario==="xdp"?"xdp":"tracepoint";state.program=$("program").value;resetRun();clearLog();state.inspector="program";updateAll();});
+
+  setInteractionLock(false);
+  updateAll();
+})();
+</script>
+</body>
+</html>
